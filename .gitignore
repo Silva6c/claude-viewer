@@ -1,0 +1,21 @@
+# 个人信息 — 绝不提交
+chat_history/
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 临时文件
+_temp_upload.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
