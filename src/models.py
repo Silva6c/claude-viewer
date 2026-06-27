@@ -1,4 +1,8 @@
-"""数据模型 —— 定义对话、消息、内容块的数据结构"""
+"""数据模型 —— 定义对话、消息、内容块的数据结构
+支持两种数据源:
+- Claude.ai 网页版导出 (conversations.json)
+- Claude Code 会话记录 (JSONL)
+"""
 
 from dataclasses import dataclass, field
 from typing import Optional
@@ -17,6 +21,7 @@ class ContentBlock:
 
     # thinking 类型
     thinking: Optional[str] = None
+    signature: Optional[str] = None          # CC 格式中 thinking 块的签名
 
     # tool_use 类型
     tool_id: Optional[str] = None          # JSON 中的 "id" 字段
@@ -29,6 +34,9 @@ class ContentBlock:
     tool_use_id: Optional[str] = None      # 关联的 tool_use id
     tool_result_content: list = field(default_factory=list)  # 嵌套的子内容块（原始 list）
     is_error: bool = False
+    # CC 格式: tool_result 可能直接有 content 字符串或 file 对象
+    tool_result_text: Optional[str] = None  # CC tool_result 的纯文本 content
+    tool_result_file: Optional[dict] = None # CC tool_result 的 file 信息
 
     # code_block 类型
     language: Optional[str] = None
@@ -88,7 +96,7 @@ class ContentBlock:
 class ChatMessage:
     """聊天消息 —— 对话中的一条消息"""
     uuid: str = ""
-    sender: str = "unknown"                      # "human" | "assistant"
+    sender: str = "unknown"                      # "human" | "assistant" | "system"
     text: str = ""                               # 纯文本（可能和 content 重复）
     content_blocks: list = field(default_factory=list)  # List[ContentBlock]
     created_at: Optional[str] = None
@@ -96,6 +104,18 @@ class ChatMessage:
     parent_message_uuid: Optional[str] = None
     attachments: list = field(default_factory=list)
     files: list = field(default_factory=list)
+
+    # ── Claude Code 特有字段 ──
+    model: Optional[str] = None              # 使用的 AI 模型名称
+    usage: Optional[dict] = None             # token 用量统计
+    stop_reason: Optional[str] = None        # 停止原因: "end_turn" | "tool_use" | ...
+    cwd: Optional[str] = None                # 工作目录
+    git_branch: Optional[str] = None         # Git 分支
+    version: Optional[str] = None            # Claude Code 版本
+    message_type: Optional[str] = None       # CC 事件类型: "user" | "assistant" | "system" | "attachment"
+    is_meta: bool = False                    # 是否为元事件（如斜杠命令输出）
+    is_sidechain: bool = False               # 是否为分支对话
+    is_tool_result: bool = False             # CC 格式: 此 user 消息是否为工具结果
 
 
 @dataclass
@@ -109,6 +129,14 @@ class Conversation:
     messages: list = field(default_factory=list)  # List[ChatMessage]
     account_uuid: Optional[str] = None
 
+    # ── Claude Code 特有字段 ──
+    session_id: Optional[str] = None         # CC 会话 ID
+    cwd: Optional[str] = None                # 工作目录
+    git_branch: Optional[str] = None         # Git 分支
+    version: Optional[str] = None            # Claude Code 版本
+    mode: Optional[str] = None               # 会话模式 (normal/...)
+    source_format: str = "claude_ai"         # 数据来源: "claude_ai" | "claude_code"
+
     @property
     def message_count(self) -> int:
         return len(self.messages)
@@ -120,3 +148,7 @@ class Conversation:
     @property
     def assistant_message_count(self) -> int:
         return sum(1 for m in self.messages if m.sender == "assistant")
+
+    @property
+    def system_message_count(self) -> int:
+        return sum(1 for m in self.messages if m.sender == "system")

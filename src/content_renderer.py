@@ -4,6 +4,7 @@
 - text/thinking 等 Markdown 内容: 输出原始文本，由前端 marked.js 渲染
 - 结构化内容 (tool_use, tool_result, code_block 等): 输出完整 HTML
 - 嵌套渲染: tool_result 内的 knowledge/webpage_metadata/local_resource 递归处理
+- CC 格式支持: tool_result 的纯文本和文件信息渲染
 
 HTML 片段由前端插入页面后，再由 marked.js 和 highlight.js 进行最终渲染。
 """
@@ -18,6 +19,30 @@ from .utils import html_escape, safe_truncate
 TOOL_ICON_MAP = {
     "globe": "🌐", "search": "🔍", "file": "📄",
     "folder": "📁", "code": "💻", "terminal": "🖥️", "image": "🖼️",
+}
+
+# ── 常见工具的人类可读名称 ──
+TOOL_DISPLAY_NAMES = {
+    "Read": "读取文件",
+    "Write": "写入文件",
+    "Edit": "编辑文件",
+    "Bash": "执行命令",
+    "PowerShell": "执行 PowerShell",
+    "Glob": "搜索文件",
+    "Grep": "搜索内容",
+    "WebSearch": "网页搜索",
+    "WebFetch": "获取网页",
+    "Agent": "启动子代理",
+    "Skill": "调用技能",
+    "TaskCreate": "创建任务",
+    "TaskUpdate": "更新任务",
+    "AskUserQuestion": "询问用户",
+    "Monitor": "监控进程",
+    "CronCreate": "创建定时任务",
+    "NotebookEdit": "编辑 Notebook",
+    "DesignSync": "设计同步",
+    "EnterPlanMode": "进入计划模式",
+    "ExitPlanMode": "退出计划模式",
 }
 
 
@@ -81,6 +106,8 @@ def render_content_block(block: ContentBlock) -> str:
         return _render_flag(block)
     elif bt == "application/vnd.ant.react":
         return _render_artifact(block)
+    elif bt == "meta_event":
+        return _render_meta_event(block)
     else:
         return _render_unknown(block)
 
@@ -116,6 +143,7 @@ def _render_tool_use(block: ContentBlock) -> str:
     tool_input = block.tool_input or {}
 
     icon_display = TOOL_ICON_MAP.get(icon, "🔧")
+    display_name = TOOL_DISPLAY_NAMES.get(name, name)
 
     # 格式化输入参数
     input_formatted = _escape_json(tool_input)
@@ -123,7 +151,8 @@ def _render_tool_use(block: ContentBlock) -> str:
     msg_html = f'<span class="tool-msg">{html_escape(msg)}</span>' if msg else ""
 
     return f'''<div class="tool-card tool-use">
-<div class="tool-header">{icon_display} 使用工具: <code class="tool-name">{html_escape(name)}</code>{msg_html}</div>
+<div class="tool-header">{icon_display} 使用工具: <code class="tool-name">{html_escape(name)}</code>
+<span class="tool-display-name">{html_escape(display_name)}</span>{msg_html}</div>
 <details class="tool-input-details">
 <summary>📝 输入参数</summary>
 <pre><code class="language-json">{input_formatted}</code></pre>
@@ -132,13 +161,42 @@ def _render_tool_use(block: ContentBlock) -> str:
 
 
 def _render_tool_result(block: ContentBlock) -> str:
-    """工具结果卡片 —— 递归渲染嵌套子内容"""
+    """工具结果卡片 —— 递归渲染嵌套子内容，支持 CC 格式"""
     name = block.tool_name or "工具"
     is_error = block.is_error
     error_class = " tool-result-error" if is_error else ""
 
-    # 递归渲染子内容块
-    sub_html = _render_tool_result_sub_blocks(block.tool_result_content)
+    # 优先使用子内容块渲染（Claude.ai 格式）
+    if block.tool_result_content:
+        sub_html = _render_tool_result_sub_blocks(block.tool_result_content)
+    # CC 格式：纯文本内容
+    elif block.tool_result_text:
+        text = block.tool_result_text
+        # 如果文本看起来像文件列表输出，用 <pre> 包裹
+        if _looks_like_file_list(text):
+            sub_html = f'<pre class="tool-result-output"><code>{html_escape(text)}</code></pre>'
+        else:
+            sub_html = f'<div class="text-block">{html_escape(text)}</div>'
+    # CC 格式：文件结果
+    elif block.tool_result_file:
+        file_info = block.tool_result_file
+        file_path = file_info.get("filePath", file_info.get("path", ""))
+        file_content = file_info.get("content", "")
+        num_lines = file_info.get("numLines", 0)
+        start_line = file_info.get("startLine", 1)
+        total_lines = file_info.get("totalLines", 0)
+
+        parts = [f'<div class="tool-result-file">']
+        parts.append(f'<div class="tool-result-file-header">📄 <code>{html_escape(file_path)}</code>')
+        if total_lines:
+            parts.append(f' <span class="file-line-info">(第 {start_line}-{start_line + num_lines - 1} 行，共 {total_lines} 行)</span>')
+        parts.append('</div>')
+        if file_content:
+            parts.append(f'<pre><code>{html_escape(file_content)}</code></pre>')
+        parts.append('</div>')
+        sub_html = "\n".join(parts)
+    else:
+        sub_html = '<em>（空结果）</em>'
 
     error_badge = '<span class="error-badge">⚠️ 错误</span>' if is_error else ""
 
@@ -146,6 +204,18 @@ def _render_tool_result(block: ContentBlock) -> str:
 <div class="tool-header">📋 {html_escape(name)} 结果 {error_badge}</div>
 <div class="tool-result-body">{sub_html}</div>
 </div>'''
+
+
+def _looks_like_file_list(text: str) -> bool:
+    """检测文本是否看起来像文件列表输出"""
+    if not text:
+        return False
+    lines = text.strip().split("\n")
+    if len(lines) > 30:
+        return True
+    # 检测是否包含典型的路径分隔符
+    path_count = sum(1 for line in lines if "/" in line or "\\" in line)
+    return path_count > len(lines) * 0.5
 
 
 def _render_code_block(block: ContentBlock) -> str:
@@ -351,6 +421,23 @@ def _render_artifact(block: ContentBlock) -> str:
 </div>'''
 
 
+def _render_meta_event(block: ContentBlock) -> str:
+    """Meta 事件块 —— 默认折叠的微型指示器"""
+    label = block.flag_text or block.type
+    raw = block.raw_data or {}
+
+    # 如果没有额外数据，只显示标签
+    if not raw or len(raw) <= 1:
+        return f'<span class="meta-indicator">{html_escape(label)}</span>'
+
+    # 有额外数据 → 可折叠展开查看原始 JSON
+    formatted = _escape_json(raw)
+    return f'''<details class="meta-event-details">
+<summary><span class="meta-indicator">{html_escape(label)}</span></summary>
+<pre class="meta-raw-data"><code class="language-json">{formatted}</code></pre>
+</details>'''
+
+
 def _render_unknown(block: ContentBlock) -> str:
     """未知类型 —— 降级显示原始 JSON"""
     raw = block.raw_data or {}
@@ -369,18 +456,34 @@ def _render_unknown(block: ContentBlock) -> str:
 # 消息级渲染
 # ═══════════════════════════════════════════
 
-def render_message_html(sender: str, content_blocks: list, fallback_text: str = "") -> str:
+def render_message_html(sender: str, content_blocks: list, fallback_text: str = "",
+                        msg_meta: dict = None) -> str:
     """将一条消息的所有内容块渲染为 HTML
 
     Args:
-        sender: "human" | "assistant"
+        sender: "human" | "assistant" | "system"
         content_blocks: ContentBlock 列表
         fallback_text: 如果 content_blocks 为空，使用此纯文本
+        msg_meta: 消息元数据 (model, usage, stop_reason 等)，用于 CC 格式
 
     Returns:
         完整的消息体 HTML 字符串
     """
     parts = []
+
+    # ── 系统消息特殊渲染 ──
+    if sender == "system":
+        return _render_system_message(fallback_text, msg_meta)
+
+    # ── Meta 消息特殊渲染 ──
+    if sender == "meta":
+        return _render_meta_message(content_blocks, fallback_text)
+
+    # ── CC 元数据横幅（仅 assistant 消息）──
+    if msg_meta and sender == "assistant":
+        meta_html = _render_cc_meta_banner(msg_meta)
+        if meta_html:
+            parts.append(meta_html)
 
     # 如果有内容块，使用内容块渲染
     if content_blocks:
@@ -394,3 +497,101 @@ def render_message_html(sender: str, content_blocks: list, fallback_text: str = 
         parts.append(f'<div class="text-block">{html_escape(fallback_text)}</div>')
 
     return "\n".join(parts)
+
+
+def _render_system_message(text: str, msg_meta: dict = None) -> str:
+    """渲染系统消息（斜杠命令输出、轮次耗时等）"""
+    if not text:
+        return ""
+    return f'<div class="system-message"><span class="system-message-text">{html_escape(text)}</span></div>'
+
+
+def _render_meta_message(content_blocks: list, fallback_text: str = "") -> str:
+    """渲染元事件消息 —— 微型可折叠指示器
+
+    将多个 meta_event 块组合成一个可折叠的单元
+    """
+    if not content_blocks and not fallback_text:
+        return ""
+
+    parts = []
+    for block in content_blocks:
+        if isinstance(block, ContentBlock):
+            rendered = render_content_block(block)
+            if rendered:
+                parts.append(rendered)
+
+    if not parts and fallback_text:
+        return f'<span class="meta-indicator">{html_escape(fallback_text)}</span>'
+
+    return "\n".join(parts)
+
+
+def _render_cc_meta_banner(msg_meta: dict) -> str:
+    """渲染 CC 特有的元数据横幅（模型、用量等）"""
+    if not msg_meta:
+        return ""
+
+    parts = []
+    model = msg_meta.get("model")
+    usage = msg_meta.get("usage")
+    stop_reason = msg_meta.get("stop_reason")
+
+    if model:
+        parts.append(f'<span class="cc-meta-model">🤖 {html_escape(model)}</span>')
+
+    if usage and isinstance(usage, dict):
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        cache_read = usage.get("cache_read_input_tokens", 0)
+        if input_tokens or output_tokens:
+            tokens_str = f"↑{input_tokens}"
+            if cache_read:
+                tokens_str += f" (缓存命中:{cache_read})"
+            tokens_str += f" ↓{output_tokens}"
+            parts.append(f'<span class="cc-meta-tokens">🔢 {tokens_str}</span>')
+
+    if stop_reason:
+        reason_map = {
+            "end_turn": "对话结束",
+            "tool_use": "调用工具",
+            "max_tokens": "达到上限",
+            "stop_sequence": "遇到停止符",
+        }
+        reason_display = reason_map.get(stop_reason, stop_reason)
+        parts.append(f'<span class="cc-meta-stop">{html_escape(reason_display)}</span>')
+
+    if parts:
+        return '<div class="cc-meta-banner">' + " · ".join(parts) + "</div>"
+
+    return ""
+
+
+def render_conversation_meta_html(conv) -> str:
+    """渲染对话的 CC 元数据横幅（显示在对话顶部）
+
+    Args:
+        conv: Conversation 对象
+
+    Returns:
+        HTML 字符串
+    """
+    if conv.source_format != "claude_code":
+        return ""
+
+    parts = ['<div class="cc-session-meta">']
+
+    if conv.mode:
+        parts.append(f'<span class="cc-session-mode">📌 模式: {html_escape(conv.mode)}</span>')
+    if conv.version:
+        parts.append(f'<span class="cc-session-version">🔖 CC v{html_escape(conv.version)}</span>')
+    if conv.cwd:
+        parts.append(f'<span class="cc-session-cwd">📂 {html_escape(conv.cwd)}</span>')
+    if conv.git_branch and conv.git_branch != "HEAD":
+        parts.append(f'<span class="cc-session-git">🌿 {html_escape(conv.git_branch)}</span>')
+
+    parts.append('</div>')
+
+    if len(parts) > 1:  # 不止有闭合标签
+        return "\n".join(parts)
+    return ""

@@ -6,6 +6,15 @@
     <title>Claude 对话浏览器</title>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script>
+      // 阻塞式初始化：首帧渲染前设置 data-theme，防止亮色偏好用户闪烁
+      (function() {
+        var theme = localStorage.getItem('claude-viewer-theme');
+        if (theme === 'dark') {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      })();
+    </script>
 </head>
 <body>
 
@@ -16,14 +25,14 @@
         <div class="drop-zone-inner">
             <span class="drop-icon">📂</span>
             <h2>Claude 对话浏览器</h2>
-            <p class="drop-hint">拖拽 <code>conversations.json</code> 到此处</p>
+            <p class="drop-hint">拖拽 <code>conversations.json</code> 或 <code>.jsonl</code> 到此处</p>
             <p class="drop-or">— 或 —</p>
             <div class="file-actions">
                 <button class="btn-primary" onclick="document.getElementById('file-input').click()">
                     📁 选择文件
                 </button>
             </div>
-            <input type="file" id="file-input" accept=".json" hidden onchange="handleFileSelect(event)">
+            <input type="file" id="file-input" accept=".json,.jsonl" hidden onchange="handleFileSelect(event)">
         </div>
         <!-- 加载中状态 -->
         <div id="loading-overlay" class="loading-overlay" style="display:none">
@@ -73,6 +82,7 @@
                         </button>
                         <div id="conv-summary-body" class="conv-summary-body"></div>
                     </div>
+                    <div id="conv-search-slot"></div>
                 </header>
                 <div id="message-list"></div>
 
@@ -106,7 +116,7 @@
         </div>
     </div>
 
-    <input type="file" id="file-input-2" accept=".json" hidden onchange="handleFileSelect(event)">
+    <input type="file" id="file-input-2" accept=".json,.jsonl" hidden onchange="handleFileSelect(event)">
 
     <!-- CDN 依赖 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>

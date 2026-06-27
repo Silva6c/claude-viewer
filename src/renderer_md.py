@@ -39,6 +39,20 @@ def export_conversation_md(conv: Conversation) -> str:
         meta_parts.append(f"**最后活跃:** {format_timestamp(conv.updated_at)}")
     meta_parts.append(f"**消息数:** {conv.message_count}")
     lines.append("> " + " · ".join(meta_parts))
+
+    # CC 特有元信息
+    if conv.source_format == "claude_code":
+        cc_meta = []
+        if conv.version:
+            cc_meta.append(f"Claude Code v{conv.version}")
+        if conv.cwd:
+            cc_meta.append(f"工作目录: `{conv.cwd}`")
+        if conv.git_branch and conv.git_branch != "HEAD":
+            cc_meta.append(f"分支: {conv.git_branch}")
+        if conv.mode:
+            cc_meta.append(f"模式: {conv.mode}")
+        if cc_meta:
+            lines.append("> " + " · ".join(cc_meta))
     lines.append("")
 
     # ── 摘要 ──
@@ -54,11 +68,22 @@ def export_conversation_md(conv: Conversation) -> str:
 
     # ── 消息列表 ──
     for i, msg in enumerate(conv.messages):
-        role = "You" if msg.sender == "human" else "Claude"
+        if msg.sender == "human":
+            role = "You"
+        elif msg.sender == "system":
+            role = "System"
+        else:
+            role = "Claude"
+
         time_str = format_timestamp(msg.created_at) if msg.created_at else ""
         header = f"### {role}"
         if time_str:
             header += f" — {time_str}"
+
+        # CC 格式: 显示模型信息
+        if msg.model:
+            header += f"  *(模型: {msg.model})*"
+
         lines.append(header)
         lines.append("")
 
@@ -173,14 +198,27 @@ def _md_tool_result(block: ContentBlock) -> str:
     if is_error:
         lines.append('> ⚠️ *错误*')
 
-    # 递归渲染子内容
-    for sub in block.tool_result_content:
-        if isinstance(sub, ContentBlock):
-            sub_md = _render_block_md(sub)
-            if sub_md:
-                # 子内容也缩进在 blockquote 中
-                for sub_line in sub_md.split('\n'):
-                    lines.append(f'> {sub_line}')
+    # 递归渲染子内容 (Claude.ai 格式)
+    if block.tool_result_content:
+        for sub in block.tool_result_content:
+            if isinstance(sub, ContentBlock):
+                sub_md = _render_block_md(sub)
+                if sub_md:
+                    for sub_line in sub_md.split('\n'):
+                        lines.append(f'> {sub_line}')
+    # CC 格式: 纯文本内容
+    elif block.tool_result_text:
+        text = block.tool_result_text.strip()
+        if text:
+            if len(text) > 2000:
+                text = text[:2000] + "\n…(内容过长已截断)"
+            for tline in text.split('\n'):
+                lines.append(f'> {tline}')
+    # CC 格式: 文件结果
+    elif block.tool_result_file:
+        file_info = block.tool_result_file
+        file_path = file_info.get("filePath", file_info.get("path", ""))
+        lines.append(f'> 📄 文件: `{file_path}`')
 
     return '\n'.join(lines)
 
